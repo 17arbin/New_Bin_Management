@@ -48,3 +48,4 @@ const LABEL_BINS = {
   // Classes meaning "nothing to sort" (e.g. a Teachable Machine background class) -> show "No item"
   unknown: "ignore", background: "ignore", nothing: "ignore", empty: "ignore", none: "ignore", "no item": "ignore"
 };
+

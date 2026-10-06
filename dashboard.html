@@ -103,6 +103,9 @@
       <div class="toolbar">
         <label class="grow">Broker WebSocket URL <input id="brokerUrl"></label>
         <label class="grow">Subscribe topic(s), comma separated <input id="topicFilter"></label>
+        <label>MQTT username <input id="mqttUsername" autocomplete="username"></label>
+        <label>MQTT password <input id="mqttPassword" type="password" autocomplete="off"></label>
+        <label>Single sensor represents <select id="sensorBin"></select></label>
         <button id="connectButton" class="primary">Connect</button>
         <button id="simButton">Start simulator</button>
         <button id="resetButton">Reset data</button>
@@ -110,9 +113,10 @@
           <select id="deviceSelect"><option value="">All devices</option></select>
         </label>
       </div>
-      <p class="help">Use the same topic as the tablet's <em>Publish topic</em>. <code>+</code> matches one topic level and
-        <code>#</code> matches everything below, e.g. <code>prog6002/2026/+/classification</code> listens to every team.
-        On a public broker anyone can publish to your topic, so treat all incoming data as untrusted.</p>
+      <p class="help">Enter your HiveMQ MQTT credentials (not your HiveMQ website login). Credentials are not saved by this dashboard.
+        Use <code>smartbin/BIN001/#</code> for your Pico. Select which bin its single sensor measures.
+        Keep the simulator off for live readings. Your firmware: heartbeat every 30 seconds; overdue after 90 seconds.
+        Classification charts need separate tablet classification messages; the distance sensor cannot count or identify items.</p>
     </section>
 
     <!-- ============ SECTION 2: headline numbers (KPIs) ============ -->
@@ -121,6 +125,17 @@
     <!-- ============ SECTION 3: bin status and level of each bin ============ -->
     <section class="grid cols-4" id="binCards"></section>
 
+    <section class="panel"><h2>Lid control</h2>
+      <div class="toolbar"><label>Control bin <select id="controlBin"></select></label>
+      <button id="openLid" class="primary">Open for 5 seconds</button><button id="closeLid">Close now</button></div>
+      <p id="commandState" role="status">Waiting for a live Pico heartbeat.</p>
+      <p class="help">Commands travel through HiveMQ to the Pico. Automatic closing is handled by the Pico. Reported state does not verify physical movement.</p>
+    </section>
+    <section class="panel"><h2>Latest MQTT payloads</h2><p class="help">Full JSON for each received topic, including alerts, acknowledgements and additional properties.</p><div id="topicPayloads"></div></section>
+    <section class="panel"><h2>Pico sensor and resources</h2>
+      <p class="help">Lid is the reported control state, not verified physical position. Sample age uses the Pico uptime; queued readings may be stale. CPU temperature in Wokwi may be simulated.</p>
+      <div class="tablewrap"><table><thead><tr><th>Bin</th><th>Lid</th><th>Sensor</th><th>Average distance</th><th>CPU temp</th><th>Free heap</th><th>Sample uptime</th><th>Sample age</th><th>Condition</th></tr></thead><tbody id="picoRows"></tbody></table></div>
+    </section>
     <!-- ============ SECTION 4: map + device list ============ -->
     <section class="grid cols-2">
       <article class="panel">
@@ -169,6 +184,7 @@
   <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="bins.js"></script>
-  <script src="dashboard.js"></script>
+  <script src="dashboard.js?v=legacy-fix-3"></script>
 </body>
 </html>
+

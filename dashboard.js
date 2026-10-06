@@ -49,6 +49,13 @@
    This file only uses textContent (through the el() helper), so a malicious "classification" cannot inject HTML.
    ===================================================================================================== */
 
+// Optional university bins.js can override these standalone defaults.
+const BIN_DEFS = typeof BINS !== "undefined" ? BINS : {
+  red: {name:"Landfill", colour:"#d92d20", description:"Single bin mapping is configurable above."},
+  yellow: {name:"Recycling", colour:"#e8a200", description:"Recyclable materials"},
+  green: {name:"Organic", colour:"#12a150", description:"Organic waste"},
+  ewaste: {name:"E-waste", colour:"#7560b5", description:"Electronic waste"}
+};
 const $ = (id) => document.getElementById(id);
 
 /* =====================================================================================================
@@ -56,19 +63,19 @@ const $ = (id) => document.getElementById(id);
    ===================================================================================================== */
 const CONFIG = {
   // Must match the tablet (index.html): "Broker WebSocket URL". Browsers need wss:// (or ws:// on http pages).
-  brokerUrl: "wss://broker.hivemq.com:8884/mqtt",
+  brokerUrl: "wss://32e9cffe913242f1bcfa250b379e19aa.s1.eu.hivemq.cloud:8884/mqtt",
 
   // Must match (or be a wildcard of) the tablet's "Publish topic". Separate several topics with commas.
   // "prog6002/2026/team01-tablet01/#"  everything below one device's topic
   // "prog6002/2026/+/classification"   the classification topic of every device (+ = any one level)
-  topicFilter: "prog6002/2026/team01-tablet01/#",
+  topicFilter: "smartbin/BIN001/#",
 
   // Only used when a bin has NOT reported a measured level: how many items fill one bin (estimate).
   // Keys must exist in BINS (bins.js). Add a key here if you add a bin there.
   binCapacity: { red: 20, yellow: 20, green: 20, ewaste: 10 },
 
   // Traffic-light thresholds, as % full.
-  warnPct: 60,     // amber at or above this
+  warnPct: 70,     // amber at or above this
   fullPct: 85,     // red ("needs emptying") at or above this
 
   // A device that has sent nothing for this long is shown as offline.
@@ -85,7 +92,7 @@ const CONFIG = {
 /* =====================================================================================================
    B. STATE: everything the screen is drawn from
    ===================================================================================================== */
-const BIN_KEYS = Object.keys(BINS);      // ["red","yellow","green","ewaste"], from bins.js, so both pages agree
+const BIN_KEYS = Object.keys(BIN_DEFS);      // ["red","yellow","green","ewaste"], from bins.js, so both pages agree
 
 // devices: Map of device_id -> {
 //   id, lastSeen (ms), location: {lat,lng,accuracy}|null, battery (%)|null, unsorted (count),
@@ -119,33 +126,48 @@ function setStatus(text, kind) {
 }
 
 function connect() {
-  if (client) { client.end(true); client = null; setStatus("Disconnected"); $("connectButton").textContent = "Connect"; return; }
+  if (client) {
+    const old = client; client = null; old.end(true);
+    setStatus("Disconnected"); $("connectButton").textContent = "Connect";
+    scheduleRender(); return;
+  }
   if (typeof mqtt === "undefined") { setStatus("MQTT library failed to load", "bad"); return; }
   const url = $("brokerUrl").value.trim();
   const topics = $("topicFilter").value.split(",").map(s => s.trim()).filter(Boolean);
-  if (!url || topics.length === 0) { setStatus("Enter a broker URL and topic", "warn"); return; }
+  if (!url.startsWith("wss://") || !topics.length) {
+    setStatus("Enter a wss:// broker URL and topic", "warn"); return;
+  }
   saveInputs();
-
   setStatus("Connecting…", "warn");
+  try {
+    client = mqtt.connect(url, {
+      clientId: "dashboard-" + Math.random().toString(16).slice(2),
+      username: $("mqttUsername").value.trim(), password: $("mqttPassword").value,
+      clean: true, queueQoSZero: false, reconnectPeriod: 3000, connectTimeout: 10000
+    });
+  } catch (err) { setStatus("Connection failed: " + err.message, "bad"); return; }
+  const connection = client;
   $("connectButton").textContent = "Disconnect";
-  // clientId must be unique per connection, otherwise the broker disconnects the older one.
-  // Add { username, password } here if your broker needs credentials (see the tablet's "Optional broker credentials").
-  client = mqtt.connect(url, { clientId: "dashboard-" + Math.random().toString(16).slice(2, 10), clean: true, reconnectPeriod: 3000, connectTimeout: 10000 });
-
-  // "connect" fires on the first connection AND after every automatic reconnect. Because clean:true wipes
-  // subscriptions, we must subscribe again every time.
-  client.on("connect", () => {
+  connection.on("connect", () => {
+    if (client !== connection) return;
+    // Require a fresh heartbeat after a dashboard reconnect.
+    for (const d of devices.values()) if (d.pico) d.pico.lastHeartbeat = 0;
     setStatus("Connected", "ok");
-    client.subscribe(topics, { qos: 1 }, (err, granted) => {
+    connection.subscribe(topics, {qos:1}, (err, granted) => {
+      if (client !== connection) return;
       if (err) setStatus("Subscribe failed: " + err.message, "bad");
-      else if (granted.some(g => g.qos === 128)) setStatus("Broker rejected a subscription", "bad");
+      else if ((granted || []).some(g => g.qos === 128)) setStatus("Subscription denied: check topic permissions", "bad");
     });
   });
-  client.on("reconnect", () => setStatus("Reconnecting…", "warn"));
-  client.on("offline", () => setStatus("Offline", "warn"));
-  client.on("error", err => setStatus("Error: " + err.message, "bad"));
-  // The single entry point for incoming data. `message` is a Buffer, so convert it to text.
-  client.on("message", (topic, message) => handleMessage(topic, message.toString()));
+  for (const event of ["reconnect", "offline", "close"]) connection.on(event, () => {
+    if (client === connection) { setStatus("Connection unavailable / reconnecting", "warn"); scheduleRender(); }
+  });
+  connection.on("error", err => {
+    if (client === connection) setStatus("Error: " + err.message, "bad");
+  });
+  connection.on("message", (topic, message, packet) => {
+    if (client === connection) handleMessage(topic, message.toString(), packet);
+  });
 }
 
 /* =====================================================================================================
@@ -153,13 +175,17 @@ function connect() {
    To support a NEW message type: add a case to the switch in handleMessage() and write a handler like
    handleBinStatus(). If you change field names in app.js buildPayload(), update the handlers here to match.
    ===================================================================================================== */
-function handleMessage(topic, text) {
+function handleMessage(topic, text, packet = {}) {
   messageCount += 1;
   logRaw(topic, text);
+  latestPayloads.set(topic, text);
+  if (latestPayloads.size > 100) latestPayloads.delete(latestPayloads.keys().next().value);
 
   let msg;
   try { msg = JSON.parse(text); } catch { return; }              // not JSON: ignore (it still shows in the raw log)
   if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
+
+  if (handlePico(topic, msg, packet)) { scheduleRender(); return; }
 
   switch (msg.message_type) {
     case "waste_classification": handleClassification(msg); break;
@@ -168,6 +194,110 @@ function handleMessage(topic, text) {
     default: break;                                              // unknown type: ignore it, never crash on it
   }
   scheduleRender();
+}
+
+// Pico messages have no message_type; route them by their exact MQTT suffix.
+// Only fresh, non-retained heartbeats prove liveness. Queued telemetry does not.
+function handlePico(topic, msg, packet) {
+  const match = /^smartbin\/([^/]+)\/(telemetry|heartbeat|status|lid\/status|command\/ack|alerts)$/.exec(topic);
+  if (!match) return false;
+  if (msg.bin_id !== match[1]) return true;
+  const d = getDevice(msg.bin_id);
+  const p = d.pico || (d.pico = {boot:null, seq:-1, lastHeartbeat:0,
+    retired:new Set(), pending:new Map(), sample:null, sampleUptime:-1, lid:null});
+  const kind = match[2];
+  if (kind === "heartbeat" && msg.boot_id === undefined && msg.status === "alive" && Number.isFinite(msg.uptime_seconds)) {
+    if (packet.retain) return true;
+    p.legacy = true;
+    if (p.lastHeartbeat && msg.uptime_seconds * 1000 < p.heartbeatUptime) {
+      p.sample = null; p.sampleUptime = -1;
+      if (pendingCommand?.device === d.id) {pendingCommand=null; commandNotice="Pico restarted; command outcome unknown.";}
+    }
+    p.heartbeatUptime = msg.uptime_seconds * 1000;
+    p.lastHeartbeat = d.lastSeen = Date.now(); p.offline = false;
+    return true;
+  }
+  if (kind === "telemetry" && msg.boot_id === undefined && Number.isFinite(msg.uptime_seconds)) {
+    // This firmware puts its boot identifier inside message_id, not in a separate field.
+    const id = typeof msg.message_id === "string" ? msg.message_id : "";
+    const boot = id.includes("-") ? id.slice(0,id.lastIndexOf("-")) : null;
+    if (boot && p.retired.has(boot)) return true;
+    if (boot && p.sampleBoot !== boot) {
+      if (p.sampleBoot) p.retired.add(p.sampleBoot);
+      if (p.retired.size > 16) p.retired.delete(p.retired.values().next().value);
+      p.sampleBoot=boot; p.sampleUptime=-1;
+    }
+    applyPicoTelemetry(d,msg); return true;
+  }
+  if (kind === "status" && msg.status === "offline") {p.offline=true; return true;}
+  if (kind === "alerts") {p.condition=msg.condition; return true;}
+  if (kind === "heartbeat") {
+    if (packet.retain || msg.status !== "alive" || typeof msg.boot_id !== "string" ||
+        !Number.isFinite(msg.uptime_ms) || !Number.isInteger(msg.seq) || p.retired.has(msg.boot_id)) return true;
+    if (p.boot !== msg.boot_id) {
+      if (p.boot) p.retired.add(p.boot);
+      if (p.retired.size > 16) p.retired.delete(p.retired.values().next().value);
+      p.boot = msg.boot_id; p.lastSentSeq = 0; p.seq = -1; p.sample = null; p.sampleUptime = -1; p.lid = null;
+    }
+    if (msg.seq <= p.seq) return true;
+    p.legacy = false; p.offline = false;
+    p.seq = msg.seq; p.heartbeatUptime = msg.uptime_ms;
+    p.nextCommandSeq = msg.next_command_seq;
+    p.lastHeartbeat = d.lastSeen = Date.now();
+    const pending = p.pending.get(p.boot);
+    if (pending) applyPicoTelemetry(d, pending);
+    p.pending.clear();
+  } else if (kind === "telemetry") {
+    if (typeof msg.boot_id !== "string" || !Number.isFinite(msg.uptime_seconds) || p.retired.has(msg.boot_id)) return true;
+    if (p.boot === msg.boot_id) applyPicoTelemetry(d, msg);
+    else {
+      const old = p.pending.get(msg.boot_id);
+      if (!old || msg.uptime_seconds > old.uptime_seconds) p.pending.set(msg.boot_id, msg);
+      if (p.pending.size > 4) p.pending.delete(p.pending.keys().next().value);
+    }
+  } else if (kind === "lid/status" && ["open", "closed"].includes(msg.state)) {
+    if (!packet.retain && pendingCommand?.device === d.id && pendingCommand.payload.command_id === msg.command_id) {
+      commandNotice = d.id+": Pico reports lid "+msg.state+" for this command.";
+      pendingCommand=null;
+    }
+    p.lid = msg.state; // Reported command state, not a physical position sensor.
+  } else if (kind === "command/ack") {
+    p.ack = String(msg.status || "unknown");
+    receiveCommandAck(d, msg);
+    if (msg.boot_id === p.boot && ["open", "closed"].includes(msg.state)) p.lid = msg.state;
+  }
+  // Retained online/offline status is visible in raw messages, not used as proof of liveness.
+  return true;
+}
+function applyPicoTelemetry(d, msg) {
+  const p = d.pico;
+  if (msg.uptime_seconds <= p.sampleUptime) return;
+  p.sampleUptime = msg.uptime_seconds; p.sample = msg;
+}
+function picoAge(p) {
+  if (!p.sample || !p.lastHeartbeat) return Infinity;
+  return Math.max(0, p.heartbeatUptime + Date.now() - p.lastHeartbeat - p.sampleUptime * 1000);
+}
+function fullestLevel(d) {
+  const values = BIN_KEYS.map(k => binLevel(d,k).pct).filter(Number.isFinite);
+  return values.length ? Math.max(...values) : null;
+}
+function deviceStatus(d) {
+  if (d.pico && !client?.connected) return "Unknown (dashboard disconnected)";
+  if (d.pico && !d.pico.lastHeartbeat) return "Awaiting heartbeat";
+  return isOnline(d) ? "Online" : "Offline / heartbeat overdue";
+}
+function renderPicoDetails(list) {
+  const rows = list.filter(d => d.pico).map(d => {
+    const p = d.pico, m = p.sample || {};
+    const num = (v, suffix) => Number.isFinite(v) ? v.toFixed(1) + suffix : "—";
+    return el("tr", {}, ...[d.id, p.lid || m.lid_state || "unknown", m.sensor_status || "awaiting telemetry",
+      num(m.distance?.smoothed_cm ?? m.distance_cm, " cm"), num(m.cpu_temperature_c," °C"),
+      num(Number.isFinite(m.free_memory_bytes) ? m.free_memory_bytes/1024 : null," KiB"),
+      num(m.uptime_seconds," s"), p.sample ? Math.round(picoAge(p)/1000)+" s" : "—",
+      p.condition || m.condition || "—"].map(v => el("td",{},v)));
+  });
+  $("picoRows").replaceChildren(...(rows.length ? rows : [el("tr",{},el("td",{colspan:9},"Awaiting Pico messages."))]));
 }
 
 // Common to every message: which device sent it, and where it is.
@@ -183,7 +313,7 @@ function touchDevice(msg) {
   return dev;
 }
 
-const isBin = (k) => typeof k === "string" && Object.hasOwn(BINS, k);   // is k a bin defined in bins.js?
+const isBin = (k) => typeof k === "string" && Object.hasOwn(BIN_DEFS, k);   // is k a bin defined in bins.js?
 
 function handleClassification(msg) {
   if (msg.source === "manual_test" || msg.classification === "TEST_ONLY") return;   // "Publish test message" button on the tablet
@@ -226,6 +356,13 @@ const selectedDevices = () => {
 
 // Fill level of ONE bin on ONE device. A measured value beats an estimate.
 function binLevel(dev, bin) {
+  if (dev.pico) {
+    const p = dev.pico, m = p.sample;
+    if (bin !== $("sensorBin").value || !m || !Number.isFinite(m.fill_percentage))
+      return {pct:null, source:"unavailable"};
+    return {pct:Math.max(0, Math.min(100, m.fill_percentage)),
+      source:picoAge(p) > 120000 || !isOnline(dev) ? "last measured / stale" : "measured"};
+  }
   const b = dev.bins[bin];
   if (b.sensorLevel !== null) return { pct: b.sensorLevel, source: "measured" };
   const cap = CONFIG.binCapacity[bin] || 20;
@@ -235,22 +372,25 @@ function binLevel(dev, bin) {
 // One bin across the devices being shown: total items, and the WORST (fullest) level, because that is
 // the one a collection crew needs to know about.
 function summariseBin(list, bin) {
-  let total = 0, worst = { pct: 0, source: "estimated" };
+  let total = 0, worst = { pct: null, source: "unavailable" };
   for (const d of list) {
     total += d.bins[bin].total;
     const lv = binLevel(d, bin);
-    if (lv.pct >= worst.pct) worst = lv;
+    if (lv.pct !== null && (worst.pct === null || lv.pct >= worst.pct)) worst = lv;
   }
   return { total, ...worst };
 }
 
 function levelState(pct) {
+  if (pct === null) return {text:"No measurement", kind:"", colour:"#98a2b3"};
   if (pct >= CONFIG.fullPct) return { text: "Needs emptying", kind: "bad", colour: "#d92d20" };
   if (pct >= CONFIG.warnPct) return { text: "Filling up", kind: "warn", colour: "#e8a200" };
   return { text: "OK", kind: "ok", colour: "#12a150" };
 }
 
-const isOnline = (dev) => Date.now() - dev.lastSeen < CONFIG.offlineAfterMs;
+const isOnline = (dev) => dev.pico
+  ? Boolean(client?.connected && dev.pico.lastHeartbeat && !dev.pico.offline && Date.now() - dev.pico.lastHeartbeat < (dev.pico.legacy ? 90000 : 30000))
+  : Date.now() - dev.lastSeen < CONFIG.offlineAfterMs;
 
 function eventsFor(list) {
   const ids = new Set(list.map(d => d.id));
@@ -302,6 +442,9 @@ function renderAll() {
   renderKpis(list, stats);
   renderBinCards(list);
   renderDevices();
+  renderPicoDetails(list);
+  renderControls();
+  renderPayloads();
   renderBinCounts(stats);
   renderTopItems(stats);
   renderTimeline(stats);
@@ -345,13 +488,13 @@ function renderKpis(list, s) {
 // One card per bin type (colours and names come from bins.js).
 function renderBinCards(list) {
   $("binCards").replaceChildren(...BIN_KEYS.map(k => {
-    const info = BINS[k], sum = summariseBin(list, k), st = levelState(sum.pct);
-    const gauge = el("div", { class: "gauge" }, el("div", { style: { width: sum.pct + "%", background: st.colour } }));
+    const info = BIN_DEFS[k], sum = summariseBin(list, k), st = levelState(sum.pct);
+    const gauge = el("div", { class: "gauge" }, el("div", { style: { width: (sum.pct ?? 0) + "%", background: st.colour } }));
     const card = el("div", { class: "bin-card", style: { borderTopColor: info.colour } },
       el("h3", {}, info.name),
       el("div", { class: "sub" }, info.description),
       gauge,
-      el("div", { class: "row" }, el("span", {}, `${Math.round(sum.pct)}% full (${sum.source})`), el("span", { class: "state " + st.kind }, st.text)),
+      el("div", { class: "row" }, el("span", {}, sum.pct === null ? "No sensor data" : `${Math.round(sum.pct)}% full (${sum.source})`), el("span", { class: "state " + st.kind }, st.text)),
       el("div", { class: "row" }, el("span", {}, "Items sorted"), el("strong", {}, String(sum.total)))
     );
     return card;
@@ -360,15 +503,15 @@ function renderBinCards(list) {
 
 function renderDevices() {
   const rows = [...devices.values()].map(d => {
-    const fullest = Math.max(...BIN_KEYS.map(k => binLevel(d, k).pct));
+    const fullest = fullestLevel(d);
     const on = isOnline(d);
     const items = BIN_KEYS.reduce((n, k) => n + d.bins[k].total, d.unsorted);
     return el("tr", {},
       el("td", {}, d.id),
-      el("td", {}, el("span", { class: "dot " + (on ? "ok" : "bad") }), on ? "Online" : "Offline"),
+      el("td", {}, el("span", { class: "dot " + (on ? "ok" : "bad") }), deviceStatus(d)),
       el("td", {}, timeAgo(d.lastSeen)),
       el("td", {}, String(items)),
-      el("td", {}, Math.round(fullest) + "%"),
+      el("td", {}, fullest === null ? "—" : Math.round(fullest) + "%"),
       el("td", {}, d.location ? `${d.location.lat.toFixed(4)}, ${d.location.lng.toFixed(4)}` : "no GPS")
     );
   });
@@ -386,8 +529,8 @@ function barRows(entries, colourFor) {
 }
 
 function renderBinCounts(s) {
-  $("binCounts").replaceChildren(...barRows(BIN_KEYS.map(k => [BINS[k].name, s.perBin[k]]),
-    name => BINS[BIN_KEYS.find(k => BINS[k].name === name)].colour));
+  $("binCounts").replaceChildren(...barRows(BIN_KEYS.map(k => [BIN_DEFS[k].name, s.perBin[k]]),
+    name => BIN_DEFS[BIN_KEYS.find(k => BIN_DEFS[k].name === name)].colour));
 }
 
 function renderTopItems(s) {
@@ -417,7 +560,7 @@ function renderRecent(s) {
     el("td", {}, new Date(e.t).toLocaleTimeString()),
     el("td", {}, e.device),
     el("td", {}, e.label),
-    el("td", {}, e.bin ? BINS[e.bin].name : "—"),
+    el("td", {}, e.bin ? BIN_DEFS[e.bin].name : "—"),
     el("td", {}, pct(e.confidence))));
   $("recentRows").replaceChildren(...(rows.length ? rows : [el("tr", {}, el("td", { colspan: 5, class: "note-empty" }, "Nothing yet."))]));
 }
@@ -456,14 +599,14 @@ function renderMap() {
     : "No device has sent a location yet. On the tablet tick “Include GPS location in messages” (needs HTTPS), or use the simulator.";
 
   for (const d of located) {
-    const fullest = Math.max(...BIN_KEYS.map(k => binLevel(d, k).pct));
+    const fullest = fullestLevel(d);
     const colour = isOnline(d) ? levelState(fullest).colour : "#98a2b3";
     let m = markers.get(d.id);
     if (!m) { m = L.circleMarker([d.location.lat, d.location.lng], { radius: 11, weight: 2, color: "#123047", fillOpacity: 0.85 }).addTo(map); markers.set(d.id, m); }
     m.setLatLng([d.location.lat, d.location.lng]).setStyle({ fillColor: colour });
     // Popup content is a DOM element (not an HTML string) so device names cannot inject markup.
     m.bindPopup(el("div", {}, el("strong", {}, d.id),
-      ...BIN_KEYS.map(k => el("div", {}, `${BINS[k].name}: ${Math.round(binLevel(d, k).pct)}%`)),
+      ...BIN_KEYS.map(k => el("div", {}, `${BIN_DEFS[k].name}: ${binLevel(d,k).pct === null ? "—" : Math.round(binLevel(d,k).pct)+"%"}`)),
       el("div", {}, "Last seen " + timeAgo(d.lastSeen))));
   }
   // Zoom to fit the devices the first time (not every update, or the map would fight the user's panning).
@@ -485,7 +628,7 @@ const SIM_DEVICES = [
   { id: "sim-bin-03", lat: -28.8027, lng: 153.2871, count: 0 }
 ];
 // Items a simulated bin can "see", taken from bins.js (skipping labels mapped to "ignore").
-const SIM_LABELS = Object.entries(DEFAULT_COCO_BINS).filter(([, bin]) => bin !== "ignore");
+const SIM_LABELS = Object.entries(typeof DEFAULT_COCO_BINS !== "undefined" ? DEFAULT_COCO_BINS : {bottle:"yellow",banana:"green",wrapper:"red",phone:"ewaste"}).filter(([, bin]) => bin !== "ignore");
 
 function simulateTick() {
   const sim = SIM_DEVICES[Math.floor(Math.random() * SIM_DEVICES.length)];
@@ -513,6 +656,7 @@ function toggleSimulator() {
 }
 
 function resetData() {
+  latestPayloads.clear(); pendingCommand = null; commandNotice = "Display reset; any active lid timer continues on the Pico.";
   devices.clear(); events = []; seenKeys.clear(); messageCount = 0;
   SIM_DEVICES.forEach(s => { s.count = 0; });
   markers.forEach(m => m.remove()); markers.clear(); mapFitted = false;
@@ -520,10 +664,87 @@ function resetData() {
   refreshDeviceSelect(); renderAll();
 }
 
+// Dashboard commands use the Pico's existing replay protection and application ACK.
+const latestPayloads = new Map();
+let pendingCommand = null;
+let commandNotice = "Waiting for a live Pico heartbeat.";
+function controlReady(d) {
+  if (d?.pico?.legacy) return isOnline(d);
+  return Boolean(d?.pico && isOnline(d) && Date.now()-d.pico.lastHeartbeat < 15000 &&
+    Number.isInteger(d.pico.nextCommandSeq) && d.pico.nextCommandSeq > 0);
+}
+function renderControls() {
+  const sel = $("controlBin"), current = sel.value;
+  const list = [...devices.values()].filter(d => d.pico);
+  sel.replaceChildren(...list.map(d => el("option",{value:d.id},d.id)));
+  sel.value = list.some(d => d.id === current) ? current : (list[0]?.id || "");
+  const d = devices.get(sel.value);
+  $("openLid").disabled = !controlReady(d) || Boolean(pendingCommand);
+  // Close can supersede an unacknowledged open.
+  $("closeLid").disabled = !controlReady(d);
+  $("commandState").textContent = commandNotice +
+    (!controlReady(d) ? " Controls need a connected broker and a fresh heartbeat matching the running firmware." : "");
+}
+function sendLidCommand(action) {
+  const d = devices.get($("controlBin").value);
+  if (!controlReady(d) || !["open_timed","close"].includes(action)) return;
+  if (pendingCommand && action !== "close") return;
+  const p = d.pico;
+  const seq = Math.max(p.nextCommandSeq, (p.lastSentSeq || 0)+1);
+  p.lastSentSeq = seq;
+  const payload = {command_id:"web-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,10),
+    action, boot_id:p.boot, seq, issued_uptime_ms:p.heartbeatUptime, duration_s:5};
+  if (p.legacy) {delete payload.boot_id; delete payload.seq; delete payload.issued_uptime_ms;}
+  pendingCommand = {legacy:Boolean(p.legacy), device:d.id, payload, text:JSON.stringify(payload), attempts:0, lastSent:0};
+  publishCommand(); renderControls();
+}
+function publishCommand() {
+  const c = pendingCommand, d = c && devices.get(c.device);
+  if (!c) return;
+  if (!controlReady(d) || (!c.legacy && d.pico.boot !== c.payload.boot_id)) {
+    commandNotice = "Command delivery uncertain: connection/heartbeat changed. No further retries.";
+    pendingCommand = null; return;
+  }
+  c.attempts++; c.lastSent = Date.now();
+  commandNotice = c.legacy ? c.device+": sent; waiting for matching lid/status." : c.device+": waiting for Pico acknowledgement (attempt "+c.attempts+"/3).";
+  // QoS 0 avoids broker/client replay queues for actuator commands. Application retries
+  // reuse the exact ID and body, so Pico deduplication prevents extending the lid timer.
+  try { client.publish("smartbin/"+c.device+"/command/lid",c.text,{qos:0,retain:false}); }
+  catch (err) { commandNotice="Publish failed: "+err.message; pendingCommand=null; }
+}
+function tickCommands() {
+  if (!pendingCommand || Date.now()-pendingCommand.lastSent < 3000) return;
+  if (pendingCommand.legacy) {
+    if (Date.now()-pendingCommand.lastSent < 10000) return;
+    commandNotice="No matching lid/status within 10 seconds. Outcome unknown; inspect Wokwi. Command was not resent.";
+    pendingCommand=null; renderControls(); return;
+  }
+  if (pendingCommand.attempts >= 3) {
+    commandNotice = "No Pico acknowledgement after 3 attempts. Outcome unknown; check lid state. The Pico owns the closing timer.";
+    pendingCommand = null;
+  } else publishCommand();
+  renderControls();
+}
+function receiveCommandAck(d,msg) {
+  const c = pendingCommand;
+  if (!c || c.device !== d.id || msg.boot_id !== c.payload.boot_id || msg.command_id !== c.payload.command_id) return;
+  commandNotice = d.id+": "+String(msg.status)+(msg.reason ? " — "+msg.reason : "")+
+    (msg.status === "accepted" ? ". Pico will close after 5 seconds." : "");
+  pendingCommand = null;
+}
+function renderPayloads() {
+  const expanded = new Set([...$("topicPayloads").children].filter(n => n.open).map(n => n.topicName));
+  $("topicPayloads").replaceChildren(...[...latestPayloads].map(([topic,text]) => {
+    let formatted = text; try { formatted=JSON.stringify(JSON.parse(text),null,2); } catch {}
+    const node = el("details",{},el("summary",{},topic),el("pre",{style:{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}},formatted));
+    node.topicName = topic; node.open = expanded.has(topic); return node;
+  }));
+}
+
 /* =====================================================================================================
    I. WIRING + START-UP
    ===================================================================================================== */
-const INPUT_KEY = "prog6002-dashboard";
+const INPUT_KEY = "prog6002-dashboard-pico-v1";
 function saveInputs() {
   try { localStorage.setItem(INPUT_KEY, JSON.stringify({ brokerUrl: $("brokerUrl").value, topicFilter: $("topicFilter").value })); } catch {}
 }
@@ -541,11 +762,17 @@ $("simButton").addEventListener("click", toggleSimulator);
 $("resetButton").addEventListener("click", resetData);
 $("deviceSelect").addEventListener("change", renderAll);
 
+$("sensorBin").replaceChildren(...BIN_KEYS.map(k => el("option", {value:k}, BIN_DEFS[k].name)));
+$("sensorBin").addEventListener("change", renderAll);
+$("openLid").addEventListener("click", () => sendLidCommand("open_timed"));
+$("closeLid").addEventListener("click", () => sendLidCommand("close"));
+$("controlBin").addEventListener("change", renderControls);
+setInterval(tickCommands, 500);
 loadInputs();
 initMap();
 renderAll();
 // Redraw every 10 s so "last seen", online/offline and the activity chart stay correct when no messages arrive.
-setInterval(renderAll, 10000);
+setInterval(renderAll, 1000);
 
 /* =====================================================================================================
    IDEAS FOR YOUR OWN DASHBOARD (pick some, invent more)
@@ -558,3 +785,4 @@ setInterval(renderAll, 10000);
      - Publish commands BACK to a device (e.g. topic ".../command") using client.publish().
      - Replace the hand-made SVG chart with Chart.js, or the raw JSON log with a searchable table.
    ===================================================================================================== */
+
