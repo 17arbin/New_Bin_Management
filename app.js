@@ -954,7 +954,7 @@ function considerPublish(result, inferenceMs, frame) {
   if (stable && confident && (changed || cooldownPassed)) {
     // Without MQTT, keep classifying but do not try to publish (and do not flood the log).
     if (!mqttClient?.connected) return;
-    if (publishPayload(buildPayload(result,inferenceMs,"camera",frame))) { lastPublishedClass=key; lastPublishedAt=now; candidateFrames=0; }
+    if (acceptDisposal(result) && publishPayload(buildPayload(result,inferenceMs,"camera",frame))) { lastPublishedClass=key; lastPublishedAt=now; candidateFrames=0; }
   }
 }
 
@@ -967,12 +967,13 @@ async function inferenceLoop() {
     setText("inferenceTime", `${Math.round(elapsed)} ms`);
     setText("detectedStatus", describeDetection(frame));
     if (frame.result) {
+      notePresentFrame();
       if (frame.stats) showInputStats(frame.stats); else setText("inputStats", "Crop of the detected object.");
       showResult(frame.result);
       drawDetections(frame.detections, frame.detection, frame.result);
       considerPublish(frame.result,elapsed,frame);
     } else if (frame.mode !== "waiting") {
-      showNoItem(); drawDetections(frame.detections);
+      noteEmptyFrame(); showNoItem(); drawDetections(frame.detections);
     }
     inferenceErrors = 0;
   } catch (error) {
@@ -1052,19 +1053,20 @@ function connectMqtt() {
   try { url = normalizeBrokerUrl($("brokerUrl").value); } catch (error) { log(error.message, "error"); return; }
   $("brokerUrl").value = url;
   const options={clientId:`${value("deviceId") || "device"}-web-${Math.random().toString(16).slice(2,10)}`,clean:true,
-                 connectTimeout:10000,reconnectPeriod:3000,keepalive:30};
+                 queueQoSZero:false,connectTimeout:10000,reconnectPeriod:3000,keepalive:30};
   if (value("mqttUsername")) options.username=value("mqttUsername");
   if ($("mqttPassword").value) options.password=$("mqttPassword").value;
   setText("mqttStatus","Connecting…"); log(`MQTT connecting to ${url}…`);
   $("mqttButton").textContent = "Disconnect MQTT";
   try { mqttClient=mqtt.connect(url,options); }
   catch (error) { log(`MQTT connect failed: ${error.message}`, "error"); mqttClient=null; $("mqttButton").textContent="Connect MQTT"; return; }
-  mqttClient.on("connect",()=>{setMqttStatus("Connected"); setMqttButtons(true);});
+  mqttClient.on("connect",()=>{setMqttStatus("Connected"); setMqttButtons(true); subscribeLid();});
   mqttClient.on("reconnect",()=>setMqttStatus("Reconnecting…", "warn"));
   mqttClient.on("offline",()=>{setMqttStatus("Offline", "warn"); setMqttButtons(false);});
   mqttClient.on("close",()=>{setMqttStatus("Disconnected", "warn"); setMqttButtons(false);});
   mqttClient.on("error",error=>log(`MQTT error: ${error.message}`,"error"));
   mqttClient.on("message",showReceived);
+  mqttClient.on("message",receiveLid);
 }
 
 // Subscribing tells the broker "send me every message published to topics matching this filter".
@@ -1180,3 +1182,4 @@ updateControls();
 try { if (localStorage.getItem(TABLET_MODE_KEY) === "1") setTabletMode(true, {fullscreen: false}); } catch {}
 renderBinMapping();
 log("App ready. Test the camera and MQTT independently, or configure a model URL and start classifying.");
+

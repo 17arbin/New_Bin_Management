@@ -128,3 +128,4 @@ body.tablet-mode .bin-badge span { font-size:clamp(1rem,2.5vw,1.3rem); }
 }
 .location-fields { display:grid; gap:.5rem; margin-top:.8rem; padding:.7rem .8rem; border:1px solid #e7eef2; border-radius:10px; background:#f8fbfc; }
 .location-fields .help { margin:0; }
+

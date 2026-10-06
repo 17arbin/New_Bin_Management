@@ -179,7 +179,7 @@
     <section class="panel">
       <h2>MQTT test</h2>
       <div class="grid two">
-        <label>Broker WebSocket URL <input id="brokerUrl" inputmode="url" value="wss://broker.hivemq.com:8884/mqtt"
+        <label>Broker WebSocket URL <input id="brokerUrl" inputmode="url" value="wss://32e9cffe913242f1bcfa250b379e19aa.s1.eu.hivemq.cloud:8884/mqtt"
           placeholder="broker.hivemq.com:8884/mqtt"></label>
         <label>Publish topic <input id="mqttTopic" value="prog6002/2026/team01-tablet01/classification"></label>
       </div>
@@ -263,12 +263,23 @@
 
   <footer>CopyRight (C) by Vinh Bui (vinh.bui@scu.edu.au)<br>Classification runs locally in the browser. Images are not sent through MQTT by this sample.</footer>
 
+  <section class="panel" style="margin:20px;padding:20px">
+    <h2>Physical bin control</h2>
+    <label>Bin ID <input id="lidBinId" value="BIN001"></label>
+    <label>Accepted category <select id="acceptedBin"><option value="all">All three waste categories (single-bin demo)</option><option value="red">Red / landfill only</option><option value="yellow">Yellow / recycling only</option><option value="green">Green / organic only</option></select></label>
+    <label><input id="autoLid" type="checkbox"> Enable automatic opening from live camera</label>
+    <p id="lidOnline">Awaiting heartbeat</p><p id="lidFeedback">A confirmed accepted item opens the lid for 5 seconds. Remove the item for at least 1.5 seconds before scanning the next one.</p>
+    <button id="tabletClose" disabled>Close bin now</button>
+    <p>Use COCO detection and “Report No item” fallback for automatic removal detection. Classification-only models must include a background/no-item class. E-waste does not open this bin.</p>
+  </section>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
   <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
   <script src="bins.js"></script>
-  <script src="app.js"></script>
+  <script src="lid-control.js?v=1"></script>
+  <script src="app.js?v=tablet-lid-1"></script>
 </body>
 </html>
+
