@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#123047">
   <title>SCU Smart Waste Terminal</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=bin-panel-2">
 </head>
 <body>
   <header>
@@ -239,6 +239,37 @@
       <ol id="receivedLog" class="log received"></ol>
     </section>
 
+    <section class="panel bin-control-panel" aria-labelledby="binControlHeading">
+      <div class="panel-head">
+        <h2 id="binControlHeading">Physical bin control</h2>
+        <span id="lidOnline" class="pill bin-connection" role="status">Awaiting heartbeat</span>
+      </div>
+      <p class="help">Choose which rubbish this bin accepts. Confirmed camera detections can open its lid for 5 seconds.</p>
+      <div class="grid two">
+        <label>Bin ID <input id="lidBinId" value="BIN001"></label>
+        <label>Accepted category
+          <select id="acceptedBin">
+            <option value="all">All three categories (single-bin demo)</option>
+            <option value="red">Red / landfill only</option>
+            <option value="yellow">Yellow / recycling only</option>
+            <option value="green">Green / organic only</option>
+          </select>
+        </label>
+      </div>
+      <div class="bin-auto-option">
+        <label class="inline" for="autoLid"><input id="autoLid" type="checkbox"> Enable automatic opening from live camera</label>
+        <p class="help">Remove the item for at least 1.5 seconds before scanning the next one.</p>
+      </div>
+      <div class="bin-control-footer">
+        <p id="lidFeedback" class="bin-feedback" role="status">Ready to connect. Wait for the bin heartbeat before sending a command.</p>
+        <button id="tabletClose" disabled>Close bin now</button>
+      </div>
+      <details class="bin-control-help">
+        <summary>Camera setup guidance</summary>
+        <p class="help">Use COCO detection and “Report No item” fallback for automatic removal detection. Classification-only models need a background/no-item class. E-waste does not open this bin.</p>
+      </details>
+    </section>
+
     <section class="grid two">
       <article class="panel status-panel">
         <h2>System state</h2>
@@ -263,15 +294,6 @@
 
   <footer>CopyRight (C) by Vinh Bui (vinh.bui@scu.edu.au)<br>Classification runs locally in the browser. Images are not sent through MQTT by this sample.</footer>
 
-  <section class="panel" style="margin:20px;padding:20px">
-    <h2>Physical bin control</h2>
-    <label>Bin ID <input id="lidBinId" value="BIN001"></label>
-    <label>Accepted category <select id="acceptedBin"><option value="all">All three waste categories (single-bin demo)</option><option value="red">Red / landfill only</option><option value="yellow">Yellow / recycling only</option><option value="green">Green / organic only</option></select></label>
-    <label><input id="autoLid" type="checkbox"> Enable automatic opening from live camera</label>
-    <p id="lidOnline">Awaiting heartbeat</p><p id="lidFeedback">A confirmed accepted item opens the lid for 5 seconds. Remove the item for at least 1.5 seconds before scanning the next one.</p>
-    <button id="tabletClose" disabled>Close bin now</button>
-    <p>Use COCO detection and “Report No item” fallback for automatic removal detection. Classification-only models must include a background/no-item class. E-waste does not open this bin.</p>
-  </section>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>

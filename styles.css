@@ -129,3 +129,23 @@ body.tablet-mode .bin-badge span { font-size:clamp(1rem,2.5vw,1.3rem); }
 .location-fields { display:grid; gap:.5rem; margin-top:.8rem; padding:.7rem .8rem; border:1px solid #e7eef2; border-radius:10px; background:#f8fbfc; }
 .location-fields .help { margin:0; }
 
+/* Physical bin control follows the terminal's panel and form layout. */
+.bin-control-panel { min-width:0; }
+.bin-control-panel > .help { margin:.5rem 0 1rem; line-height:1.5; }
+.bin-connection { background:#eaf1f5; color:var(--navy); white-space:normal; }
+.bin-auto-option { margin-top:1rem; padding:.85rem; border:1px solid #d5e0e7; border-radius:10px; background:#f8fbfc; }
+.bin-auto-option label.inline { gap:.65rem; font-size:.85rem; line-height:1.45; }
+.bin-auto-option input[type="checkbox"] { width:20px; height:20px; flex:0 0 20px; accent-color:var(--blue); }
+.bin-auto-option .help { margin:.4rem 0 0 1.9rem; line-height:1.5; }
+.bin-control-footer { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-top:1rem; }
+.bin-feedback { margin:0; font-size:.85rem; line-height:1.5; color:#3d5566; overflow-wrap:anywhere; }
+.bin-control-footer button { flex-shrink:0; }
+.bin-control-help { padding-top:.85rem; border-top:1px solid #e7eef2; font-size:.8rem; }
+.bin-control-help .help { line-height:1.5; }
+/* Keep bin control accessible when the camera uses tablet mode. */
+body.tablet-mode main > section.bin-control-panel { display:block !important; }
+@media (max-width:700px) {
+  .bin-control-footer { flex-direction:column; align-items:stretch; }
+  .bin-control-footer button { width:100%; }
+}
+
