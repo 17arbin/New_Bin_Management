@@ -68,7 +68,7 @@ const CONFIG = {
   // Must match (or be a wildcard of) the tablet's "Publish topic". Separate several topics with commas.
   // "prog6002/2026/team01-tablet01/#"  everything below one device's topic
   // "prog6002/2026/+/classification"   the classification topic of every device (+ = any one level)
-  topicFilter: "smartbin/BIN001/#",
+  topicFilter: "smartbin/BIN001/#,prog6002/2026/team01-tablet01/classification",
 
   // Only used when a bin has NOT reported a measured level: how many items fill one bin (estimate).
   // Keys must exist in BINS (bins.js). Add a key here if you add a bin there.
@@ -76,7 +76,7 @@ const CONFIG = {
 
   // Traffic-light thresholds, as % full.
   warnPct: 70,     // amber at or above this
-  fullPct: 85,     // red ("needs emptying") at or above this
+  fullPct: 85,     // red ("needs emptying") strictly above this
 
   // A device that has sent nothing for this long is shown as offline.
   offlineAfterMs: 5 * 60 * 1000,
@@ -185,6 +185,7 @@ function handleMessage(topic, text, packet = {}) {
   try { msg = JSON.parse(text); } catch { return; }              // not JSON: ignore (it still shows in the raw log)
   if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
 
+  if (handleBinLocation(topic, msg)) { scheduleRender(); return; }
   if (handlePico(topic, msg, packet)) { scheduleRender(); return; }
 
   switch (msg.message_type) {
@@ -271,7 +272,7 @@ function handlePico(topic, msg, packet) {
 }
 function applyPicoTelemetry(d, msg) {
   const p = d.pico;
-  if (msg.uptime_seconds <= p.sampleUptime) return;
+  if (!Number.isFinite(msg.uptime_seconds) || msg.uptime_seconds<0 || msg.uptime_seconds <= p.sampleUptime) return;
   p.sampleUptime = msg.uptime_seconds; p.sample = msg;
 }
 function picoAge(p) {
@@ -283,6 +284,7 @@ function fullestLevel(d) {
   return values.length ? Math.max(...values) : null;
 }
 function deviceStatus(d) {
+  if (d.location?.fix && !d.pico) return "GPS gateway only; awaiting Pico";
   if (d.pico && !client?.connected) return "Unknown (dashboard disconnected)";
   if (d.pico && !d.pico.lastHeartbeat) return "Awaiting heartbeat";
   return isOnline(d) ? "Online" : "Offline / heartbeat overdue";
@@ -358,15 +360,14 @@ const selectedDevices = () => {
 function binLevel(dev, bin) {
   if (dev.pico) {
     const p = dev.pico, m = p.sample;
-    if (bin !== $("sensorBin").value || !m || !Number.isFinite(m.fill_percentage))
+    if (bin !== $("sensorBin").value || !m || m.sensor_status !== "ok" || !Number.isFinite(m.fill_percentage) || m.fill_percentage<0 || m.fill_percentage>100)
       return {pct:null, source:"unavailable"};
     return {pct:Math.max(0, Math.min(100, m.fill_percentage)),
       source:picoAge(p) > 120000 || !isOnline(dev) ? "last measured / stale" : "measured"};
   }
   const b = dev.bins[bin];
   if (b.sensorLevel !== null) return { pct: b.sensorLevel, source: "measured" };
-  const cap = CONFIG.binCapacity[bin] || 20;
-  return { pct: Math.min(100, (b.sinceEmptied / cap) * 100), source: "estimated" };
+  return {pct:null,source:"unavailable (classification is not a fill measurement)"};
 }
 
 // One bin across the devices being shown: total items, and the WORST (fullest) level, because that is
@@ -383,14 +384,14 @@ function summariseBin(list, bin) {
 
 function levelState(pct) {
   if (pct === null) return {text:"No measurement", kind:"", colour:"#98a2b3"};
-  if (pct >= CONFIG.fullPct) return { text: "Needs emptying", kind: "bad", colour: "#d92d20" };
+  if (pct > CONFIG.fullPct) return { text: "Needs emptying", kind: "bad", colour: "#d92d20" };
   if (pct >= CONFIG.warnPct) return { text: "Filling up", kind: "warn", colour: "#e8a200" };
   return { text: "OK", kind: "ok", colour: "#12a150" };
 }
 
 const isOnline = (dev) => dev.pico
   ? Boolean(client?.connected && dev.pico.lastHeartbeat && !dev.pico.offline && Date.now() - dev.pico.lastHeartbeat < (dev.pico.legacy ? 90000 : 30000))
-  : Date.now() - dev.lastSeen < CONFIG.offlineAfterMs;
+  : Boolean(dev.lastSeen && Date.now() - dev.lastSeen < CONFIG.offlineAfterMs);
 
 function eventsFor(list) {
   const ids = new Set(list.map(d => d.id));
@@ -400,7 +401,7 @@ function eventsFor(list) {
 function computeStats(list) {
   const evs = eventsFor(list);
   const perBin = Object.fromEntries(BIN_KEYS.map(k => [k, 0]));
-  const perLabel = {};
+  const perLabel = Object.create(null);
   let confSum = 0, confN = 0;
   for (const e of evs) {
     if (e.bin) perBin[e.bin] += 1;
@@ -487,7 +488,7 @@ function renderKpis(list, s) {
 
 // One card per bin type (colours and names come from bins.js).
 function renderBinCards(list) {
-  $("binCards").replaceChildren(...BIN_KEYS.map(k => {
+  $("binCards").replaceChildren(...[$("sensorBin").value].map(k => {
     const info = BIN_DEFS[k], sum = summariseBin(list, k), st = levelState(sum.pct);
     const gauge = el("div", { class: "gauge" }, el("div", { style: { width: (sum.pct ?? 0) + "%", background: st.colour } }));
     const card = el("div", { class: "bin-card", style: { borderTopColor: info.colour } },
@@ -512,7 +513,7 @@ function renderDevices() {
       el("td", {}, timeAgo(d.lastSeen)),
       el("td", {}, String(items)),
       el("td", {}, fullest === null ? "—" : Math.round(fullest) + "%"),
-      el("td", {}, d.location ? `${d.location.lat.toFixed(4)}, ${d.location.lng.toFixed(4)}` : "no GPS")
+      el("td", {}, d.location ? `${d.location.lat.toFixed(4)}, ${d.location.lng.toFixed(4)}${d.location.fix && !GeoRules.fresh(d.location.fix) ? " (stale)" : ""}` : "no GPS")
     );
   });
   $("deviceRows").replaceChildren(...(rows.length ? rows : [el("tr", {}, el("td", { colspan: 6, class: "note-empty" }, "No devices yet. Connect, or start the simulator."))]));
@@ -593,7 +594,9 @@ function initMap() {
 
 function renderMap() {
   if (!map) return;
-  const located = [...devices.values()].filter(d => d.location);
+  const located = [...devices.values()].filter(d => d.location && (!d.location.fix || GeoRules.fresh(d.location.fix)));
+  const ids=new Set(located.map(d=>d.id));
+  for (const [id,marker] of markers) if(!ids.has(id)){marker.remove();markers.delete(id);}
   $("mapNote").textContent = located.length
     ? ""
     : "No device has sent a location yet. On the tablet tick “Include GPS location in messages” (needs HTTPS), or use the simulator.";
@@ -744,7 +747,7 @@ function renderPayloads() {
 /* =====================================================================================================
    I. WIRING + START-UP
    ===================================================================================================== */
-const INPUT_KEY = "prog6002-dashboard-pico-v1";
+const INPUT_KEY = "prog6002-dashboard-gps-v2";
 function saveInputs() {
   try { localStorage.setItem(INPUT_KEY, JSON.stringify({ brokerUrl: $("brokerUrl").value, topicFilter: $("topicFilter").value })); } catch {}
 }
@@ -763,6 +766,7 @@ $("resetButton").addEventListener("click", resetData);
 $("deviceSelect").addEventListener("change", renderAll);
 
 $("sensorBin").replaceChildren(...BIN_KEYS.map(k => el("option", {value:k}, BIN_DEFS[k].name)));
+$("sensorBin").value="green";
 $("sensorBin").addEventListener("change", renderAll);
 $("openLid").addEventListener("click", () => sendLidCommand("open_timed"));
 $("closeLid").addEventListener("click", () => sendLidCommand("close"));
@@ -771,7 +775,7 @@ setInterval(tickCommands, 500);
 loadInputs();
 initMap();
 renderAll();
-// Redraw every 10 s so "last seen", online/offline and the activity chart stay correct when no messages arrive.
+// Redraw every 1 s so "last seen", online/offline and the activity chart stay correct when no messages arrive.
 setInterval(renderAll, 1000);
 
 /* =====================================================================================================
@@ -785,4 +789,16 @@ setInterval(renderAll, 1000);
      - Publish commands BACK to a device (e.g. topic ".../command") using client.publish().
      - Replace the hand-made SVG chart with Chart.js, or the raw JSON log with a searchable table.
    ===================================================================================================== */
+
+
+// GPS updates do not mark the Pico online: only its own heartbeat does that.
+function handleBinLocation(topic,msg) {
+  const match=/^smartbin\/([A-Za-z0-9_-]{1,64})\/location$/.exec(topic);
+  if(!match) return false;
+  if(msg.bin_id!==match[1] || msg.message_type!=="bin_location" || typeof msg.device_id!=="string" || !GeoRules.fresh(msg.location)) return true;
+  const d=getDevice(msg.bin_id), fix=msg.location;
+  if(d.location?.fix && Date.parse(fix.timestamp)<=Date.parse(d.location.fix.timestamp)) return true;
+  d.location={lat:fix.latitude,lng:fix.longitude,accuracy:fix.accuracy_m,fix,source:msg.device_id};
+  return true;
+}
 

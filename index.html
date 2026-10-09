@@ -9,7 +9,7 @@
 </head>
 <body>
   <header>
-    <div><span class="eyebrow">PROG6002 · WEEK 4</span><h1>SCU Smart Waste Terminal</h1></div>
+    <div><span class="eyebrow">PROG6002 · GPS &amp; ROUTING · 09 OCT 2026</span><h1>SCU Smart Waste Terminal</h1></div>
     <div class="header-actions">
       <button id="tabletToggle" class="header-button" aria-pressed="false">Tablet mode</button>
       <button id="logToggle" class="header-button log-toggle" aria-expanded="true" aria-controls="logPanel">
@@ -185,7 +185,8 @@
       </div>
       <p class="help"><code>wss://</code> is added automatically if the URL has no scheme.</p>
       <div class="location-fields">
-        <label class="inline"><input id="includeLocation" type="checkbox"> Include GPS location in messages</label>
+        <label class="inline"><input id="includeLocation" type="checkbox"> Share this tablet’s GPS as the selected bin’s location</label>
+        <p id="gpsGatewayStatus" role="status" class="help">GPS sharing off.</p><p class="help">Keep this tablet beside the bin. GPS uses the Bin ID below (default BIN001) and publishes independently of the camera. Updates: movement after 30 seconds, otherwise every 60 seconds; fixes expire after 2 minutes. Keep the page open.</p>
         <label>Location precision
           <select id="locationPrecision">
             <option value="5">Precise (≈1 m)</option>
@@ -301,7 +302,10 @@
   <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
   <script src="bins.js"></script>
   <script src="lid-control.js?v=1"></script>
-  <script src="app.js?v=tablet-lid-1"></script>
+  <script src="geo-rules.js?v=gps-20261009"></script>
+  <script src="app.js?v=gps-20261009"></script>
+  <script src="gps-gateway.js?v=gps-20261009"></script>
 </body>
 </html>
+
 

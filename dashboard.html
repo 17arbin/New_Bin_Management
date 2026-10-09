@@ -36,7 +36,7 @@
     .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
     .panel h2 { margin:0 0 10px; font-size:16px; }
     .grid { display:grid; gap:16px; }
-    .cols-2 { grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }
+    .cols-2 { grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); }
     .cols-4 { grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); }
     .cols-kpi { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
     label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
@@ -90,7 +90,7 @@
 </head>
 <body>
   <header>
-    <div><span class="eyebrow">PROG6002 · STARTER PROTOTYPE</span><h1>SCU Smart Waste Dashboard</h1></div>
+    <div><span class="eyebrow">PROG6002 · GPS &amp; ROUTING · 09 OCT 2026</span><h1>SCU Smart Waste Dashboard</h1></div>
     <div id="mqttStatus" class="pill">Disconnected</div>
   </header>
 
@@ -152,6 +152,17 @@
       </article>
     </section>
 
+    <section class="panel"><h2>Single-bin collection route</h2>
+      <div class="toolbar">
+        <label>Bin ID <input id="routeBin" value="BIN001" maxlength="64"></label>
+        <label>Start latitude <input id="originLat" type="number" min="-90" max="90" step="any" placeholder="Enter latitude"></label>
+        <label>Start longitude <input id="originLng" type="number" min="-180" max="180" step="any" placeholder="Enter longitude"></label>
+        <button id="useOrigin">Use my location as start</button>
+        <button id="routeButton" class="primary">Enable collection routing</button>
+      </div>
+      <p id="routeStatus" role="status">Routing off. Enter the collection vehicle or depot location.</p>
+      <p class="help">Enabling sends the start and bin coordinates to the public OSRM road-routing service. A route appears automatically only with a live bin, valid sensor reading above 85%, and GPS less than 2 minutes old (accuracy within 100 m). Requests are limited to one per minute. One bin means one destination, not multi-stop optimization. Travel time excludes collection time and live traffic. Demo service availability is not guaranteed.</p>
+    </section>
     <!-- ============ SECTION 5: statistics about rubbish collected ============ -->
     <section class="grid cols-2">
       <article class="panel"><h2>Items per bin</h2><div id="binCounts"></div></article>
@@ -184,7 +195,10 @@
   <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="bins.js"></script>
-  <script src="dashboard.js?v=legacy-fix-3"></script>
+  <script src="geo-rules.js?v=gps-20261009"></script>
+  <script src="dashboard.js?v=gps-20261009"></script>
+  <script src="collection-route.js?v=gps-20261009"></script>
 </body>
 </html>
+
 

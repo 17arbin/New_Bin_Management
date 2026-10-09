@@ -21,7 +21,7 @@
    ===================================================================================================== */
 
 const $ = (id) => document.getElementById(id);
-const fields = ["pipeline","detScore","fallback","modelSource","modelUrl","normalization","backend","region","deviceId","mqttTopic","subscribeTopic","brokerUrl","threshold","stableFrames","cooldown","mqttUsername","locationPrecision"];
+const fields = ["pipeline","detScore","fallback","modelSource","modelUrl","normalization","backend","region","deviceId","mqttTopic","subscribeTopic","brokerUrl","threshold","stableFrames","cooldown","mqttUsername","locationPrecision","lidBinId"];
 const STORAGE_KEY = "prog6002-classifier", LOG_VISIBLE_KEY = "prog6002-log-visible", SETTINGS_VERSION = 2;
 const PASSWORD_KEY = "prog6002-mqtt-password";   // only written when "Remember password" is ticked
 let model = null, stream = null, running = false, mqttClient = null, subscribedTopic = "";
@@ -157,14 +157,14 @@ function startLocation() {
     if (!lastFix) log(`Location available (accuracy ±${Math.round(position.coords.accuracy)} m).`);
     lastFix = position; lastLocationProblem = "";
     const loc = locationPayload();
-    setText("locationStatus", `${loc.latitude}, ${loc.longitude} (±${loc.accuracy_m} m)`);
+    setText("locationStatus", loc ? `${loc.latitude}, ${loc.longitude} (±${loc.accuracy_m} m)` : "Waiting for a fresh valid fix");
   }, error => {
     const problem = { 1: "permission denied", 2: "position unavailable", 3: "timed out" }[error.code] ?? error.message;
     setText("locationStatus", lastFix ? `Last fix kept (${problem})` : `Unavailable (${problem})`);
     if (problem !== lastLocationProblem) log(`Location ${problem}.${lastFix ? " Using the last fix." : " Messages will have \"location\": null."}`, "warn");
     lastLocationProblem = problem;
     if (error.code === 1) { stopLocation(); $("includeLocation").checked = false; setText("locationStatus", "Permission denied"); }
-  }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 30000 });
+  }, { enableHighAccuracy: false, maximumAge: 30000, timeout: 30000 });
 }
 
 function stopLocation() {
@@ -176,7 +176,9 @@ function stopLocation() {
 // Latest fix for the MQTT message, rounded to the chosen number of decimal places; null if off or no fix yet.
 function locationPayload() {
   if (!$("includeLocation").checked || !lastFix) return null;
-  const decimals = Number($("locationPrecision").value), c = lastFix.coords;
+  const decimals = Math.max(2,Math.min(5,Number($("locationPrecision").value)||4)), c = lastFix.coords;
+  const age=Date.now()-lastFix.timestamp;
+  if (!GeoRules.valid(c.latitude,c.longitude) || !Number.isFinite(c.accuracy) || c.accuracy<0 || !Number.isFinite(age) || age < -5000 || age > GeoRules.maxAge) return null;
   const round = v => Number(v.toFixed(decimals));
   const roundingError = 111320 * 10 ** -decimals / 2;          // metres lost by rounding latitude
   return {
@@ -924,7 +926,7 @@ function buildPayload(result, inferenceMs, source="camera", frame=null) {
 function publishText(text, description) {
   if (!mqttClient?.connected) { log("Cannot publish: MQTT is disconnected.", "error"); return false; }
   const topic=value("mqttTopic");
-  if (!topic) { log("Cannot publish: publish topic is empty.", "error"); return false; }
+  if (!topic || /[+#\u0000]/.test(topic)) { log("Cannot publish: enter a topic without wildcards.", "error"); return false; }
   mqttClient.publish(topic, text, {qos:1, retain:false}, error => {
     if (error) return log(`Publish failed: ${error.message}`, "error");
     published += 1; setText("publishedCount", published); setText("payloadPreview", prettyPrint(text));
@@ -1060,7 +1062,7 @@ function connectMqtt() {
   $("mqttButton").textContent = "Disconnect MQTT";
   try { mqttClient=mqtt.connect(url,options); }
   catch (error) { log(`MQTT connect failed: ${error.message}`, "error"); mqttClient=null; $("mqttButton").textContent="Connect MQTT"; return; }
-  mqttClient.on("connect",()=>{setMqttStatus("Connected"); setMqttButtons(true); subscribeLid();});
+  mqttClient.on("connect",()=>{setMqttStatus("Connected"); setMqttButtons(true); subscribeLid(); if (typeof gpsTick === "function") { gpsGateway.last=null; gpsTick(); }});
   mqttClient.on("reconnect",()=>setMqttStatus("Reconnecting…", "warn"));
   mqttClient.on("offline",()=>{setMqttStatus("Offline", "warn"); setMqttButtons(false);});
   mqttClient.on("close",()=>{setMqttStatus("Disconnected", "warn"); setMqttButtons(false);});
@@ -1165,7 +1167,7 @@ $("saveButton").addEventListener("click",saveSettings);
 $("tabletToggle").addEventListener("click",()=>setTabletMode(!document.body.classList.contains("tablet-mode")));
 $("rememberPassword").addEventListener("change",rememberPasswordChanged);
 $("includeLocation").addEventListener("change",locationChanged);
-$("locationPrecision").addEventListener("change",()=>{ if (lastFix) { const l = locationPayload(); setText("locationStatus", `${l.latitude}, ${l.longitude} (±${l.accuracy_m} m)`); } });
+$("locationPrecision").addEventListener("change",()=>{ if (locationPayload()) { const l = locationPayload(); setText("locationStatus", `${l.latitude}, ${l.longitude} (±${l.accuracy_m} m)`); } });
 $("testButton").addEventListener("click",publishTest);
 $("subscribeButton").addEventListener("click",toggleSubscribe);
 $("clearReceivedButton").addEventListener("click",clearReceived);
@@ -1174,7 +1176,7 @@ $("clearLogButton").addEventListener("click",clearLog);
 $("errorsOnly").addEventListener("change",e=>$("eventLog").classList.toggle("errors-only", e.target.checked));
 window.addEventListener("error",e=>log(`Script error: ${e.message}`,"error"));
 window.addEventListener("unhandledrejection",e=>log(`Unhandled error: ${e.reason?.message || e.reason}`,"error"));
-window.addEventListener("pagehide",()=>{stopAll(); if(mqttClient)mqttClient.end(true);});
+window.addEventListener("pagehide",()=>{stopAll(); stopLocation(); if(mqttClient)mqttClient.end(true);});
 loadSettings();
 updateModelSourceUi();
 pipelineChanged();
@@ -1182,4 +1184,5 @@ updateControls();
 try { if (localStorage.getItem(TABLET_MODE_KEY) === "1") setTabletMode(true, {fullscreen: false}); } catch {}
 renderBinMapping();
 log("App ready. Test the camera and MQTT independently, or configure a model URL and start classifying.");
+
 
