@@ -127,9 +127,9 @@
 
     <section class="panel"><h2>Lid control</h2>
       <div class="toolbar"><label>Control bin <select id="controlBin"></select></label>
-      <button id="openLid" class="primary">Open for 5 seconds</button><button id="closeLid">Close now</button></div>
+      <button id="openLid" class="primary">Open</button><button id="closeLid">Close now</button></div>
       <p id="commandState" role="status">Waiting for a live Pico heartbeat.</p>
-      <p class="help">Commands travel through HiveMQ to the Pico. Automatic closing is handled by the Pico. Reported state does not verify physical movement.</p>
+      <p class="help">Open holds the lid open until Close is pressed. Camera detections open for 5 seconds only when no manual hold is active. Commands travel through HiveMQ to the Pico. Reported state does not verify physical movement.</p>
     </section>
     <section class="panel"><h2>Latest MQTT payloads</h2><p class="help">Full JSON for each received topic, including alerts, acknowledgements and additional properties.</p><div id="topicPayloads"></div></section>
     <section class="panel"><h2>Pico sensor and resources</h2>
@@ -196,7 +196,7 @@
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="bins.js"></script>
   <script src="geo-rules.js?v=gps-20261009"></script>
-  <script src="dashboard.js?v=gps-20261009"></script>
+  <script src="dashboard.js?v=manual-hold-20261009"></script>
   <script src="collection-route.js?v=gps-20261009"></script>
 </body>
 </html>

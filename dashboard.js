@@ -258,7 +258,7 @@ function handlePico(topic, msg, packet) {
     }
   } else if (kind === "lid/status" && ["open", "closed"].includes(msg.state)) {
     if (!packet.retain && pendingCommand?.device === d.id && pendingCommand.payload.command_id === msg.command_id) {
-      commandNotice = d.id+": Pico reports lid "+msg.state+" for this command.";
+      commandNotice = d.id+": Pico reports lid "+msg.state+(msg.mode === "manual_hold" ? " (manual hold; press Close to release)." : " for this command.");
       pendingCommand=null;
     }
     p.lid = msg.state; // Reported command state, not a physical position sensor.
@@ -690,13 +690,14 @@ function renderControls() {
 }
 function sendLidCommand(action) {
   const d = devices.get($("controlBin").value);
-  if (!controlReady(d) || !["open_timed","close"].includes(action)) return;
+  if (!controlReady(d) || !["open","open_timed","close"].includes(action)) return;
   if (pendingCommand && action !== "close") return;
   const p = d.pico;
   const seq = Math.max(p.nextCommandSeq, (p.lastSentSeq || 0)+1);
   p.lastSentSeq = seq;
   const payload = {command_id:"web-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,10),
     action, boot_id:p.boot, seq, issued_uptime_ms:p.heartbeatUptime, duration_s:5};
+  if (action !== "open_timed") delete payload.duration_s;
   if (p.legacy) {delete payload.boot_id; delete payload.seq; delete payload.issued_uptime_ms;}
   pendingCommand = {legacy:Boolean(p.legacy), device:d.id, payload, text:JSON.stringify(payload), attempts:0, lastSent:0};
   publishCommand(); renderControls();
@@ -732,7 +733,7 @@ function receiveCommandAck(d,msg) {
   const c = pendingCommand;
   if (!c || c.device !== d.id || msg.boot_id !== c.payload.boot_id || msg.command_id !== c.payload.command_id) return;
   commandNotice = d.id+": "+String(msg.status)+(msg.reason ? " — "+msg.reason : "")+
-    (msg.status === "accepted" ? ". Pico will close after 5 seconds." : "");
+    (msg.status === "accepted" ? (c.payload.action === "open" ? ". Manual hold: press Close to release." : c.payload.action === "open_timed" ? ". Timed opening accepted." : ". Close accepted.") : "");
   pendingCommand = null;
 }
 function renderPayloads() {
@@ -768,7 +769,7 @@ $("deviceSelect").addEventListener("change", renderAll);
 $("sensorBin").replaceChildren(...BIN_KEYS.map(k => el("option", {value:k}, BIN_DEFS[k].name)));
 $("sensorBin").value="green";
 $("sensorBin").addEventListener("change", renderAll);
-$("openLid").addEventListener("click", () => sendLidCommand("open_timed"));
+$("openLid").addEventListener("click", () => sendLidCommand("open"));
 $("closeLid").addEventListener("click", () => sendLidCommand("close"));
 $("controlBin").addEventListener("change", renderControls);
 setInterval(tickCommands, 500);
