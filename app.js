@@ -294,7 +294,23 @@ function defaultRule(label) {
   return word ? LABEL_BINS[word] : null;
 }
 
+// Exact classes from this project's Teachable Machine metadata.
+// Normalise whitespace/case, including the trailing space in "No Object ".
+function tmGreenRule(label) {
+  const key = String(label).trim().toLowerCase().replace(/\s+/g, " ").replace(/\s*,\s*/g, ",");
+  if (key === "green bin - vegitables,fruits" || key === "green bin - leaves,plants") return "green";
+  if (key === "no object") return "ignore";
+  if (key === "bottles") return "yellow";
+  return null;
+}
+function cameraThreshold() {
+  const configured = Number(value("threshold"));
+  return Math.max(0.8, Number.isFinite(configured) ? configured : 0.8);
+}
+
 function ruleFor(label) {
+  const fixed = tmGreenRule(label);
+  if (fixed !== null) return fixed;
   const key = String(label).trim().toLowerCase();
   return key in binOverrides ? binOverrides[key] : defaultRule(key);
 }
@@ -344,7 +360,7 @@ function squareAround([x, y, w, h], frameW, frameH) {
 // Returns null when the top class is mapped to "no item" (for example a Teachable Machine "unknown" class).
 function classifierResult(predictions) {
   const sorted = [...predictions].sort((a, b) => b.probability - a.probability);
-  if (ruleFor(sorted[0].className) === "ignore") return null;
+  if (!sorted.length || ruleFor(sorted[0].className) === "ignore") return null;
   return { label: sorted[0].className, confidence: sorted[0].probability, bin: binFor(sorted[0].className),
            alternatives: sorted.slice(1, 5).map(p => ({ label: p.className, confidence: p.probability, bin: binFor(p.className) })) };
 }
@@ -361,7 +377,9 @@ async function analyseFrame(src) {
   const classify = async (source, reg, mode, detection = null, detections = []) => {
     const {predictions, stats} = await model.predict(source, {region: reg, preview});
     const result = classifierResult(predictions);
-    return { mode: result ? mode : "none", result, detection, detections, stats };
+    const top = [...predictions].sort((a,b) => b.probability-a.probability)[0];
+    const confidentEmpty = Boolean(top && tmGreenRule(top.className) === "ignore" && top.probability >= cameraThreshold());
+    return { mode: result ? mode : "none", result, detection, detections, stats, confidentEmpty };
   };
   if (!usesDetection()) return classify(src, region, "classify");
 
@@ -948,9 +966,10 @@ function publishPayload(payload) {
 // All three numbers are boxes on the "Classifier configuration" panel. Change the logic here if your
 // project needs something else (e.g. publish once per item and wait until the item is removed).
 function considerPublish(result, inferenceMs, frame) {
-  const threshold=Number(value("threshold")), required=Number(value("stableFrames")), cooldown=Number(value("cooldown"));
+  const threshold=cameraThreshold(), required=Math.max(3, Number(value("stableFrames")) || 3), cooldown=Math.max(0, Number(value("cooldown")) || 0);
   const key=`${result.label}|${result.bin}`;
-  updateStability(key);
+  if (result.confidence >= threshold) updateStability(key);
+  else { candidate=""; candidateFrames=0; }
   const now=Date.now(), stable=candidateFrames>=required, confident=result.confidence>=threshold;
   const changed=key!==lastPublishedClass, cooldownPassed=now-lastPublishedAt>=cooldown;
   if (stable && confident && (changed || cooldownPassed)) {
@@ -975,10 +994,13 @@ async function inferenceLoop() {
       drawDetections(frame.detections, frame.detection, frame.result);
       considerPublish(frame.result,elapsed,frame);
     } else if (frame.mode !== "waiting") {
-      noteEmptyFrame(); showNoItem(); drawDetections(frame.detections);
+      if (frame.confidentEmpty === true) noteEmptyFrame();
+      else notePresentFrame(); // Uncertain/failed detection is not proof the item was removed.
+      showNoItem(); drawDetections(frame.detections);
     }
     inferenceErrors = 0;
   } catch (error) {
+    notePresentFrame(); candidate=""; candidateFrames=0;
     // Tolerate occasional errors (e.g. a frame lost during rotation); stop only if they keep happening.
     inferenceErrors += 1;
     log(`Inference error (${inferenceErrors}/5): ${error.message}`, "error");
@@ -1184,5 +1206,6 @@ updateControls();
 try { if (localStorage.getItem(TABLET_MODE_KEY) === "1") setTabletMode(true, {fullscreen: false}); } catch {}
 renderBinMapping();
 log("App ready. Test the camera and MQTT independently, or configure a model URL and start classifying.");
+
 
 

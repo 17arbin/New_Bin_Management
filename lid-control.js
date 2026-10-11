@@ -42,17 +42,25 @@ function noteEmptyFrame(){
 }
 function notePresentFrame(){lidLink.emptySince=null;}
 function acceptDisposal(result){
-  // Called only for confident, stable camera results. Photo/test publishing never actuates.
-  if(lidLink.occupied || Date.now()-lidLink.lastEvent<6000)return false;
-  lidLink.occupied=true;lidLink.lastEvent=Date.now();
-  if(!document.getElementById('autoLid').checked)return true;
-  const accepted=document.getElementById('acceptedBin').value;
-  if(!['red','yellow','green'].includes(result.bin) || (accepted!=='all' && result.bin!==accepted)){
-    lidNote('Recognised '+result.label+'; this category is not accepted by the selected bin.');return true;
+  // One accepted event per item; require confident No Object for 1.5 s to reset.
+  if(lidLink.occupied || (lidLink.lastEvent && Date.now()-lidLink.lastEvent<6000))return false;
+  if(document.getElementById('autoLid').checked){
+    // Only these two TM classes may actuate this single green bin.
+    if(tmGreenRule(result.label)!=='green'){
+      lidNote('Recognised '+result.label+'; only the two Green Bin classes can open this lid.');
+    }else{
+      if(lidLink.pending){lidNote('Waiting for the previous lid command response.');return false;}
+      // If offline, leave this item eligible for a later stable frame after reconnection.
+      if(!sendTabletLid('open_timed'))return false;
+    }
+  }else{
+    lidNote('Automatic opening is disabled. Enable it, then remove and show the item again.');
   }
-  sendTabletLid('open_timed');return true;
+  lidLink.occupied=true;lidLink.lastEvent=Date.now();
+  return true;
 }
 window.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('acceptedBin').value='green';
   document.getElementById('tabletClose').addEventListener('click',()=>sendTabletLid('close'));
   document.getElementById('lidBinId').addEventListener('change',()=>{lidLink.lastHeartbeat=0;lidLink.pending=null;});
   setInterval(()=>{
@@ -61,4 +69,5 @@ window.addEventListener('DOMContentLoaded',()=>{
     if(lidLink.pending && Date.now()-lidLink.pending.at>=10000){lidLink.pending=null;lidNote('No matching response in 10 seconds. Outcome unknown; command not resent.');}
   },1000);
 });
+
 
