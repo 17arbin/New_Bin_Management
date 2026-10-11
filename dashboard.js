@@ -189,6 +189,12 @@ function handleMessage(topic, text, packet = {}) {
   if (handlePico(topic, msg, packet)) { scheduleRender(); return; }
 
   switch (msg.message_type) {
+    case "tablet_heartbeat":
+      if (!packet.retain && msg.status === "alive" && typeof msg.device_id === "string" && msg.device_id.trim()) {
+        const tablet = touchDevice(msg);
+        tablet.tabletHeartbeat = true;
+      }
+      break;
     case "waste_classification": handleClassification(msg); break;
     case "bin_status":           handleBinStatus(msg); break;
     // case "my_new_type":       handleMyNewType(msg); break;    // <- your own message types go here
@@ -391,7 +397,7 @@ function levelState(pct) {
 
 const isOnline = (dev) => dev.pico
   ? Boolean(client?.connected && dev.pico.lastHeartbeat && !dev.pico.offline && Date.now() - dev.pico.lastHeartbeat < (dev.pico.legacy ? 90000 : 30000))
-  : Boolean(dev.lastSeen && Date.now() - dev.lastSeen < CONFIG.offlineAfterMs);
+  : Boolean(dev.lastSeen && Date.now() - dev.lastSeen < (dev.tabletHeartbeat ? 90000 : CONFIG.offlineAfterMs));
 
 function eventsFor(list) {
   const ids = new Set(list.map(d => d.id));
@@ -802,4 +808,5 @@ function handleBinLocation(topic,msg) {
   d.location={lat:fix.latitude,lng:fix.longitude,accuracy:fix.accuracy_m,fix,source:msg.device_id};
   return true;
 }
+
 

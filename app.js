@@ -965,6 +965,7 @@ function publishPayload(payload) {
 //   new/due   it is a different item from the last one published, OR the "Publish cooldown" has passed
 // All three numbers are boxes on the "Classifier configuration" panel. Change the logic here if your
 // project needs something else (e.g. publish once per item and wait until the item is removed).
+let classificationOccupied = false;
 function considerPublish(result, inferenceMs, frame) {
   const threshold=cameraThreshold(), required=Math.max(3, Number(value("stableFrames")) || 3), cooldown=Math.max(0, Number(value("cooldown")) || 0);
   const key=`${result.label}|${result.bin}`;
@@ -975,7 +976,11 @@ function considerPublish(result, inferenceMs, frame) {
   if (stable && confident && (changed || cooldownPassed)) {
     // Without MQTT, keep classifying but do not try to publish (and do not flood the log).
     if (!mqttClient?.connected) return;
-    if (acceptDisposal(result) && publishPayload(buildPayload(result,inferenceMs,"camera",frame))) { lastPublishedClass=key; lastPublishedAt=now; candidateFrames=0; }
+    // Classification delivery is independent of Pico liveness and servo commands.
+    if (!classificationOccupied && publishPayload(buildPayload(result,inferenceMs,"camera",frame))) {
+      classificationOccupied=true; lastPublishedClass=key; lastPublishedAt=now;
+    }
+    acceptDisposal(result);
   }
 }
 
@@ -994,7 +999,10 @@ async function inferenceLoop() {
       drawDetections(frame.detections, frame.detection, frame.result);
       considerPublish(frame.result,elapsed,frame);
     } else if (frame.mode !== "waiting") {
-      if (frame.confidentEmpty === true) noteEmptyFrame();
+      if (frame.confidentEmpty === true) {
+        noteEmptyFrame();
+        if (!lidLink.occupied && lidLink.emptySince !== null && Date.now()-lidLink.emptySince>=1500) classificationOccupied=false;
+      }
       else notePresentFrame(); // Uncertain/failed detection is not proof the item was removed.
       showNoItem(); drawDetections(frame.detections);
     }
@@ -1084,7 +1092,7 @@ function connectMqtt() {
   $("mqttButton").textContent = "Disconnect MQTT";
   try { mqttClient=mqtt.connect(url,options); }
   catch (error) { log(`MQTT connect failed: ${error.message}`, "error"); mqttClient=null; $("mqttButton").textContent="Connect MQTT"; return; }
-  mqttClient.on("connect",()=>{setMqttStatus("Connected"); setMqttButtons(true); subscribeLid(); if (typeof gpsTick === "function") { gpsGateway.last=null; gpsTick(); }});
+  mqttClient.on("connect",()=>{setMqttStatus("Connected"); setMqttButtons(true); publishTabletHeartbeat(); subscribeLid(); if (typeof gpsTick === "function") { gpsGateway.last=null; gpsTick(); }});
   mqttClient.on("reconnect",()=>setMqttStatus("Reconnecting…", "warn"));
   mqttClient.on("offline",()=>{setMqttStatus("Offline", "warn"); setMqttButtons(false);});
   mqttClient.on("close",()=>{setMqttStatus("Disconnected", "warn"); setMqttButtons(false);});
@@ -1208,4 +1216,17 @@ renderBinMapping();
 log("App ready. Test the camera and MQTT independently, or configure a model URL and start classifying.");
 
 
+
+// Separate liveness from disposal events. Use the configured publish topic so
+// existing dashboard subscriptions receive this message without new permissions.
+function publishTabletHeartbeat() {
+  if (!mqttClient?.connected) return;
+  const topic=value("mqttTopic"), device=value("deviceId");
+  if (!topic || /[+#\u0000]/.test(topic) || !device) return;
+  const payload={schema_version:1,message_type:"tablet_heartbeat",device_id:device,
+    status:"alive",timestamp:new Date().toISOString()};
+  try {mqttClient.publish(topic,JSON.stringify(payload),{qos:0,retain:false});}
+  catch(error){log("Tablet heartbeat failed: "+error.message,"warn");}
+}
+setInterval(publishTabletHeartbeat,30000);
 
