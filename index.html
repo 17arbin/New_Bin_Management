@@ -9,7 +9,7 @@
 </head>
 <body>
   <header>
-    <div><span class="eyebrow">PROG6002 · RESILIENCE UPDATE · 10 OCT 2026</span><h1>SCU Smart Waste Terminal</h1></div>
+    <div><span class="eyebrow">PROG6002 · GPS &amp; ROUTING · 09 OCT 2026</span><h1>SCU Smart Waste Terminal</h1></div>
     <div class="header-actions">
       <button id="tabletToggle" class="header-button" aria-pressed="false">Tablet mode</button>
       <button id="logToggle" class="header-button log-toggle" aria-expanded="true" aria-controls="logPanel">
@@ -253,7 +253,7 @@
             <option value="all">All three categories (single-bin demo)</option>
             <option value="red">Red / landfill only</option>
             <option value="yellow">Yellow / recycling only</option>
-            <option value="green" selected>Green / organic only</option>
+            <option value="green">Green / organic only</option>
           </select>
         </label>
       </div>
@@ -266,8 +266,8 @@
         <button id="tabletClose" disabled>Close bin now</button>
       </div>
       <details class="bin-control-help">
-        <summary>Camera setup guidance and test limits</summary>
-        <p class="help">Use COCO detection and “Report No item” fallback for automatic removal detection. Automatic opening is disabled for classification-only mode and centre fallback. Multiple detected objects block opening. Minimum command confidence is 80%. Unknown objects may not be detected at all. E-waste does not open this bin.</p>
+        <summary>Camera setup guidance</summary>
+        <p class="help">Use COCO detection and “Report No item” fallback for automatic removal detection. Classification-only models need a background/no-item class. E-waste does not open this bin.</p>
       </details>
     </section>
 
@@ -291,7 +291,6 @@
         <pre id="payloadPreview">No message published.</pre>
       </article>
     </section>
-  <section class="panel"><h2>Test evidence</h2><button id="exportEvidence">Download test log</button><p class="help">Last 500 browser observations. Export before refreshing. Timings are software observations, not verified servo movement.</p></section>
   </main>
 
   <footer>CopyRight (C) by Vinh Bui (vinh.bui@scu.edu.au)<br>Classification runs locally in the browser. Images are not sent through MQTT by this sample.</footer>
@@ -302,11 +301,9 @@
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
   <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
   <script src="bins.js"></script>
-  <script src="command-protocol.js?v=20261010"></script>
-  <script src="evidence-log.js?v=20261010"></script>
-  <script src="lid-control.js?v=resilience-20261010"></script>
+  <script src="lid-control.js?v=1"></script>
   <script src="geo-rules.js?v=gps-20261009"></script>
-  <script src="app.js?v=resilience-20261010"></script>
+  <script src="app.js?v=gps-20261009"></script>
   <script src="gps-gateway.js?v=gps-20261009"></script>
 </body>
 </html>
