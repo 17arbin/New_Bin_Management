@@ -90,7 +90,7 @@
 </head>
 <body>
   <header>
-    <div><span class="eyebrow">PROG6002 · GPS &amp; ROUTING · 09 OCT 2026</span><h1>SCU Smart Waste Dashboard</h1></div>
+    <div><span class="eyebrow">PROG6002 · RESILIENCE UPDATE · 10 OCT 2026</span><h1>SCU Smart Waste Dashboard</h1></div>
     <div id="mqttStatus" class="pill">Disconnected</div>
   </header>
 
@@ -115,7 +115,7 @@
       </div>
       <p class="help">Enter your HiveMQ MQTT credentials (not your HiveMQ website login). Credentials are not saved by this dashboard.
         Use <code>smartbin/BIN001/#</code> for your Pico. Select which bin its single sensor measures.
-        Keep the simulator off for live readings. Your firmware: heartbeat every 30 seconds; overdue after 90 seconds.
+        Keep the simulator off for live readings. Heartbeat every 30 seconds; overdue after 90 seconds. Controls require clock synchronization and protocol-2 firmware.
         Classification charts need separate tablet classification messages; the distance sensor cannot count or identify items.</p>
     </section>
 
@@ -187,6 +187,7 @@
       <h2>Raw MQTT messages (debug)</h2>
       <ol id="rawLog"></ol>
     </section>
+  <section class="panel"><h2>Test evidence</h2><div class="toolbar"><button id="testReplay">Test: timed open repeated 50 times</button><button id="testDelay">Test: timed open delayed 3.5 seconds</button></div><p id="testStatus" role="status">Tests operate the selected bin. Start closed and below full. These are deliberate test commands.</p><button id="exportEvidence">Download test log</button><p class="help">Last 500 browser observations. Export before refreshing. Timings are software observations, not verified servo movement.</p></section>
   </main>
 
   <footer>Prototype for teaching. Extend it: history charts, alerts, collection routes, saved data&hellip; See the TODO ideas in dashboard.js.</footer>
@@ -195,9 +196,12 @@
   <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="bins.js"></script>
+  <script src="command-protocol.js?v=20261010"></script>
+  <script src="evidence-log.js?v=20261010"></script>
   <script src="geo-rules.js?v=gps-20261009"></script>
-  <script src="dashboard.js?v=manual-hold-20261009"></script>
+  <script src="dashboard.js?v=resilience-20261010"></script>
   <script src="collection-route.js?v=gps-20261009"></script>
+<script src="resilience-tests.js?v=20261010"></script>
 </body>
 </html>
 

@@ -185,6 +185,7 @@ function handleMessage(topic, text, packet = {}) {
   try { msg = JSON.parse(text); } catch { return; }              // not JSON: ignore (it still shows in the raw log)
   if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
 
+  if (topic.endsWith('/events') || topic.endsWith('/command/ack')) Evidence.add('pico_message',{topic,payload:msg});
   if (handleBinLocation(topic, msg)) { scheduleRender(); return; }
   if (handlePico(topic, msg, packet)) { scheduleRender(); return; }
 
@@ -207,6 +208,21 @@ function handlePico(topic, msg, packet) {
   const p = d.pico || (d.pico = {boot:null, seq:-1, lastHeartbeat:0,
     retired:new Set(), pending:new Map(), sample:null, sampleUptime:-1, lid:null});
   const kind = match[2];
+  if(kind === "heartbeat" && msg.command_protocol === 2) {
+    if(packet.retain || msg.status!=="alive" || typeof msg.boot_id!=="string" || typeof msg.session_id!=="string" ||
+       !Number.isFinite(msg.uptime_ms) || !Number.isInteger(msg.seq)) return true;
+    if(p.retired.has(msg.boot_id)) return true;
+    if(p.boot===msg.boot_id && p.seq>=msg.seq) return true;
+    if(p.boot!==msg.boot_id){
+      p.sample=null;p.sampleUptime=-1;p.pending.clear();p.seq=-1;
+      if(p.boot)p.retired.add(p.boot);
+      if(p.retired.size>16)p.retired.delete(p.retired.values().next().value);
+    }
+    p.boot=msg.boot_id;p.seq=msg.seq;p.protocol=2;p.hb=CommandProtocol.observe(msg);p.legacy=true;p.offline=false;
+    p.heartbeatUptime=msg.uptime_ms;p.lastHeartbeat=d.lastSeen=Date.now();
+    return true;
+  }
+
   if (kind === "heartbeat" && msg.boot_id === undefined && msg.status === "alive" && Number.isFinite(msg.uptime_seconds)) {
     if (packet.retain) return true;
     p.legacy = true;
@@ -257,14 +273,14 @@ function handlePico(topic, msg, packet) {
       if (p.pending.size > 4) p.pending.delete(p.pending.keys().next().value);
     }
   } else if (kind === "lid/status" && ["open", "closed"].includes(msg.state)) {
-    if (!packet.retain && pendingCommand?.device === d.id && pendingCommand.payload.command_id === msg.command_id) {
+    if (p.protocol !== 2 && !packet.retain && pendingCommand?.device === d.id && pendingCommand.payload.command_id === msg.command_id) {
       commandNotice = d.id+": Pico reports lid "+msg.state+(msg.mode === "manual_hold" ? " (manual hold; press Close to release)." : " for this command.");
       pendingCommand=null;
     }
     p.lid = msg.state; // Reported command state, not a physical position sensor.
   } else if (kind === "command/ack") {
     p.ack = String(msg.status || "unknown");
-    receiveCommandAck(d, msg);
+    if(!packet.retain) receiveCommandAck(d, msg);
     if (msg.boot_id === p.boot && ["open", "closed"].includes(msg.state)) p.lid = msg.state;
   }
   // Retained online/offline status is visible in raw messages, not used as proof of liveness.
@@ -672,9 +688,7 @@ const latestPayloads = new Map();
 let pendingCommand = null;
 let commandNotice = "Waiting for a live Pico heartbeat.";
 function controlReady(d) {
-  if (d?.pico?.legacy) return isOnline(d);
-  return Boolean(d?.pico && isOnline(d) && Date.now()-d.pico.lastHeartbeat < 15000 &&
-    Number.isInteger(d.pico.nextCommandSeq) && d.pico.nextCommandSeq > 0);
+  return Boolean(d?.pico?.protocol===2 && d.pico.hb?.clock_synced && isOnline(d));
 }
 function renderControls() {
   const sel = $("controlBin"), current = sel.value;
@@ -686,55 +700,30 @@ function renderControls() {
   // Close can supersede an unacknowledged open.
   $("closeLid").disabled = !controlReady(d);
   $("commandState").textContent = commandNotice +
-    (!controlReady(d) ? " Controls need a connected broker and a fresh heartbeat matching the running firmware." : "");
+    (!controlReady(d) ? " Controls need a connected broker and a fresh heartbeat and protocol-2 clock sync. Update main.py and allow its NTP sync to complete." : "");
 }
 function sendLidCommand(action) {
-  const d = devices.get($("controlBin").value);
-  if (!controlReady(d) || !["open","open_timed","close"].includes(action)) return;
-  if (pendingCommand && action !== "close") return;
-  const p = d.pico;
-  const seq = Math.max(p.nextCommandSeq, (p.lastSentSeq || 0)+1);
-  p.lastSentSeq = seq;
-  const payload = {command_id:"web-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2,10),
-    action, boot_id:p.boot, seq, issued_uptime_ms:p.heartbeatUptime, duration_s:5};
-  if (action !== "open_timed") delete payload.duration_s;
-  if (p.legacy) {delete payload.boot_id; delete payload.seq; delete payload.issued_uptime_ms;}
-  pendingCommand = {legacy:Boolean(p.legacy), device:d.id, payload, text:JSON.stringify(payload), attempts:0, lastSent:0};
-  publishCommand(); renderControls();
-}
-function publishCommand() {
-  const c = pendingCommand, d = c && devices.get(c.device);
-  if (!c) return;
-  if (!controlReady(d) || (!c.legacy && d.pico.boot !== c.payload.boot_id)) {
-    commandNotice = "Command delivery uncertain: connection/heartbeat changed. No further retries.";
-    pendingCommand = null; return;
-  }
-  c.attempts++; c.lastSent = Date.now();
-  commandNotice = c.legacy ? c.device+": sent; waiting for matching lid/status." : c.device+": waiting for Pico acknowledgement (attempt "+c.attempts+"/3).";
-  // QoS 0 avoids broker/client replay queues for actuator commands. Application retries
-  // reuse the exact ID and body, so Pico deduplication prevents extending the lid timer.
-  try { client.publish("smartbin/"+c.device+"/command/lid",c.text,{qos:0,retain:false}); }
-  catch (err) { commandNotice="Publish failed: "+err.message; pendingCommand=null; }
-}
-function tickCommands() {
-  if (!pendingCommand || Date.now()-pendingCommand.lastSent < 3000) return;
-  if (pendingCommand.legacy) {
-    if (Date.now()-pendingCommand.lastSent < 10000) return;
-    commandNotice="No matching lid/status within 10 seconds. Outcome unknown; inspect Wokwi. Command was not resent.";
-    pendingCommand=null; renderControls(); return;
-  }
-  if (pendingCommand.attempts >= 3) {
-    commandNotice = "No Pico acknowledgement after 3 attempts. Outcome unknown; check lid state. The Pico owns the closing timer.";
-    pendingCommand = null;
-  } else publishCommand();
+  const d=devices.get($("controlBin").value);
+  if(!controlReady(d) || (pendingCommand && action!=="close")) return;
+  let payload;try{payload=CommandProtocol.build(d.pico.hb,action,'web');}catch(e){commandNotice=e.message;renderControls();return;}
+  pendingCommand={device:d.id,payload,lastSent:Date.now(),started:performance.now()};
+  commandNotice="Sent; waiting for Pico acceptance/rejection.";
+  try{client.publish("smartbin/"+d.id+"/command/lid",JSON.stringify(payload),{qos:0,retain:false});Evidence.add('dashboard_command_sent',payload);}
+  catch(e){pendingCommand=null;commandNotice="Publish failed: "+e.message;}
   renderControls();
 }
+function tickCommands() {
+  if(pendingCommand && Date.now()-pendingCommand.lastSent>=5000){
+    Evidence.add('dashboard_ack_timeout',{command_id:pendingCommand.payload.command_id});
+    pendingCommand=null;commandNotice="No matching ACK in 5 seconds. Outcome unknown; command was not resent.";renderControls();
+  }
+}
 function receiveCommandAck(d,msg) {
-  const c = pendingCommand;
-  if (!c || c.device !== d.id || msg.boot_id !== c.payload.boot_id || msg.command_id !== c.payload.command_id) return;
-  commandNotice = d.id+": "+String(msg.status)+(msg.reason ? " — "+msg.reason : "")+
-    (msg.status === "accepted" ? (c.payload.action === "open" ? ". Manual hold: press Close to release." : c.payload.action === "open_timed" ? ". Timed opening accepted." : ". Close accepted.") : "");
-  pendingCommand = null;
+  const c=pendingCommand;
+  if(!c || c.device!==d.id || msg.boot_id!==c.payload.boot_id || msg.session_id!==c.payload.session_id || msg.command_id!==c.payload.command_id) return;
+  Evidence.add('dashboard_command_ack',{...msg,round_trip_ms:Math.round(performance.now()-c.started)});
+  commandNotice=d.id+": "+String(msg.status)+" — "+String(msg.reason)+". Lid "+msg.state+" ("+msg.mode+").";
+  pendingCommand=null;
 }
 function renderPayloads() {
   const expanded = new Set([...$("topicPayloads").children].filter(n => n.open).map(n => n.topicName));

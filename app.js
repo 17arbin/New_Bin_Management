@@ -371,7 +371,8 @@ async function analyseFrame(src) {
     if ($("fallback").value === "centre") return classify(src, region, "fallback");
     return { mode: "none", result: null, detection: null, detections };
   }
-  // The largest object is the one being shown to the camera.
+  if (detections.length > 1) return {mode:"multiple",result:null,detection:null,detections};
+  // Exactly one relevant detected object is required.
   const detection = detections.reduce((a, b) => b.bbox[2] * b.bbox[3] > a.bbox[2] * a.bbox[3] ? b : a);
   const r = squareAround(detection.bbox, fw, fh);
   cropCanvas.width = cropCanvas.height = 256;
@@ -425,6 +426,7 @@ function drawDetections(detections = [], primary = null, result = null) {
 function describeDetection({mode, detection, detections}) {
   if (mode === "classify") return "Not used";
   if (mode === "waiting") return "Waiting for camera…";
+  if (mode === "multiple") return "Multiple objects — present one item at a time";
   if (mode === "coco" || mode === "detect")
     return `${detection.class} ${(detection.score * 100).toFixed(0)}%` + (detections.length > 1 ? ` (+${detections.length - 1} more)` : "");
   return mode === "fallback" ? "Nothing (classified centre)" : "Nothing detected";
@@ -948,7 +950,7 @@ function publishPayload(payload) {
 // All three numbers are boxes on the "Classifier configuration" panel. Change the logic here if your
 // project needs something else (e.g. publish once per item and wait until the item is removed).
 function considerPublish(result, inferenceMs, frame) {
-  const threshold=Number(value("threshold")), required=Number(value("stableFrames")), cooldown=Number(value("cooldown"));
+  const threshold=Math.max(0.8,Number(value("threshold")) || 0.8), required=Number(value("stableFrames")), cooldown=Number(value("cooldown"));
   const key=`${result.label}|${result.bin}`;
   updateStability(key);
   const now=Date.now(), stable=candidateFrames>=required, confident=result.confidence>=threshold;
@@ -960,6 +962,10 @@ function considerPublish(result, inferenceMs, frame) {
   }
 }
 
+let lastVisionEvent="",lastVisionLog=0;
+function visionEvent(kind,details){
+  if(kind!==lastVisionEvent || Date.now()-lastVisionLog>=5000){Evidence.add(kind,details);lastVisionEvent=kind;lastVisionLog=Date.now();}
+}
 async function inferenceLoop() {
   if (!running) return;
   try {
@@ -968,8 +974,14 @@ async function inferenceLoop() {
     const elapsed=performance.now()-start;
     setText("inferenceTime", `${Math.round(elapsed)} ms`);
     setText("detectedStatus", describeDetection(frame));
-    if (frame.result) {
-      notePresentFrame();
+    if (frame.mode === "multiple") {
+      notePresentFrame();showNoItem("Multiple items", "Please present one item at a time. Lid opening blocked.");
+      drawDetections(frame.detections);visionEvent("multiple_objects", {count:frame.detections.length});
+    } else if (frame.result && frame.result.confidence < Math.max(0.8,Number(value("threshold")) || 0.8)) {
+      notePresentFrame();showNoItem("Unrecognized item", "Confidence too low. Show one item clearly and try again.");
+      drawDetections(frame.detections);visionEvent("low_confidence",{label:frame.result.label,confidence:frame.result.confidence});
+    } else if (frame.result) {
+      notePresentFrame();visionEvent("recognized",{label:frame.result.label,confidence:frame.result.confidence,inference_ms:Math.round(elapsed)});
       if (frame.stats) showInputStats(frame.stats); else setText("inputStats", "Crop of the detected object.");
       showResult(frame.result);
       drawDetections(frame.detections, frame.detection, frame.result);
